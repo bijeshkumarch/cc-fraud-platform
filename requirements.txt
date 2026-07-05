@@ -1,0 +1,13 @@
+pandas
+numpy
+fastparquet
+scikit-learn
+joblib
+pyarrow
+redis
+kafka-python
+apache-airflow-providers-apache-spark
+psycopg2-binary
+# Optional: install pyspark if you want to run Spark code inside the Airflow container
+# (not required if Spark binary is installed and you submit to a remote cluster).
+# pyspark==3.5.2
