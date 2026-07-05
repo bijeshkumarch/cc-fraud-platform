@@ -1,0 +1,129 @@
+networks:
+  fraud-net:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - fraud-net
+
+  kafka:
+    image: confluentinc/cp-kafka:8.1.0
+    environment:
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_NODE_ID=1
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+    ports:
+      - '9092:9092'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - fraud-net
+
+  redis:
+    image: redis:7
+    ports:
+      - '6379:6379'
+    networks:
+      - fraud-net
+
+  spark-master:
+    build: ./spark
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+      - SPARK_HOME=/opt/spark
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      --host spark-master --port 7077 --webui-port 8080
+    ports:
+      - '7077:7077'
+      - '8081:8080' # host 8081 -> spark master web UI
+    networks:
+      - fraud-net
+    volumes:
+      - ./streaming:/opt/project/streaming
+      - ./batch:/opt/project/batch
+      - ./common:/opt/project/common
+      - ./data:/opt/project/data
+      - ./model:/opt/project/model
+      - ./checkpoints:/opt/project/checkpoints
+      - ./sparkJobControl:/opt/project/sparkJobControl
+
+  spark-worker:
+    build: ./spark
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=1g
+      - SPARK_WORKER_CORES=1
+      - SPARK_HOME=/opt/spark
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077 --webui-port 8081 --cores 1 --memory 1g
+    depends_on:
+      - spark-master
+    networks:
+      - fraud-net
+    ports:
+      - '8082:8081'
+    volumes:
+      - ./streaming:/opt/project/streaming
+      - ./batch:/opt/project/batch
+      - ./common:/opt/project/common
+      - ./data:/opt/project/data
+      - ./model:/opt/project/model
+      - ./checkpoints:/opt/project/checkpoints
+      - ./sparkJobControl:/opt/project/sparkJobControl
+
+  airflow:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    image: fraud-airflow:latest
+    depends_on:
+      - postgres
+      - kafka
+      - spark-master
+      - redis
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      - AIRFLOW__CORE__FERNET_KEY=YOUR_FERNET_KEY
+      - AIRFLOW__WEBSERVER__SECRET_KEY=YOUR_SECRET_KEY
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - PYTHONPATH=/opt/project:/opt/airflow
+      - REDIS_HOST=redis
+      - PROJECT_BASE_PATH=/opt/project
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/logs:/opt/airflow/logs
+      - ./batch:/opt/project/batch
+      - ./common:/opt/project/common
+      - ./data:/opt/project/data
+      - ./model:/opt/project/model
+      - ./checkpoints:/opt/project/checkpoints
+      - ./streaming:/opt/project/streaming
+      - ./sparkJobControl:/opt/project/sparkJobControl
+    ports:
+      - '8080:8080'
+    networks:
+      - fraud-net
+
+volumes:
+  postgres_data:
+  kafka_data:
